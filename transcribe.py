@@ -404,6 +404,15 @@ class FoundryTranscribeTrayApp:
 
         self._manager.download_and_register_eps(progress_callback=ep_progress)
         self._available_models = self._discover_whisper_models()
+        if self.model_name not in self._available_models and self._available_models:
+            fallback = self._available_models[0]
+            logging.warning(
+                "Configured model '%s' not available, falling back to '%s'",
+                self.model_name,
+                fallback,
+            )
+            self.model_name = fallback
+
         self._load_speech_model(self.model_name)
         logging.info("Foundry model loaded: %s", self.model_name)
 
@@ -721,7 +730,7 @@ class FoundryTranscribeTrayApp:
                     logging.info("Switched to model: %s", self.model_name)
                     beep_async(1100, 80)
             except (OSError, RuntimeError, ValueError, TypeError):
-                logging.exception("Model switch failed, reverting to %s", old_model_name)
+                logging.exception("Model switch failed")
                 try:
                     self._load_speech_model(old_model_name)
                 except (OSError, RuntimeError, ValueError, TypeError):
@@ -797,7 +806,7 @@ class FoundryTranscribeTrayApp:
             pystray.MenuItem(toggle_label, self._menu_toggle_hook),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(model_label, lambda *_: None, enabled=False),
-            pystray.MenuItem("Whisper model", self._build_model_submenu),
+            pystray.MenuItem("Whisper model", self._build_model_submenu()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(mic_label, lambda *_: None, enabled=False),
             pystray.Menu.SEPARATOR,
