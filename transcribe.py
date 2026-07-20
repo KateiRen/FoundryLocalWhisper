@@ -142,11 +142,16 @@ def configure_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[
-            logging.FileHandler(APP_LOG_PATH, encoding="utf-8"),
-            logging.StreamHandler(),
-        ],
+        handlers=[logging.StreamHandler()],
     )
+
+
+def append_transcript_log(ts: str, text: str) -> None:
+    try:
+        with open(APP_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(f"{ts}\t{text}\n")
+    except OSError:
+        logging.exception("Failed writing transcript log")
 
 
 def create_mic_icon(recording: bool = False) -> Image.Image:
@@ -500,6 +505,7 @@ class FoundryTranscribeTrayApp:
 
             if text:
                 logging.info("Transcription: %s", text)
+                append_transcript_log(ts, text)
                 set_clipboard_text(text)
                 if self.auto_paste:
                     simulate_ctrl_v()
@@ -688,6 +694,8 @@ class FoundryTranscribeTrayApp:
     def _menu_open_app_log(self, _icon, _item) -> None:
         if APP_LOG_PATH.exists():
             os.startfile(str(APP_LOG_PATH))
+        else:
+            logging.info("No transcript log yet")
 
     def _menu_select_model(self, model_name: str) -> None:
         if model_name == self.model_name or self._model_switch_in_progress:
@@ -728,13 +736,25 @@ class FoundryTranscribeTrayApp:
         if not self._available_models:
             return pystray.Menu(pystray.MenuItem("No models found", lambda *_: None, enabled=False))
 
+        def _make_select_action(model_name: str):
+            def _action(_icon, _item):
+                self._menu_select_model(model_name)
+
+            return _action
+
+        def _make_checked_action(model_name: str):
+            def _checked(_item):
+                return self.model_name == model_name
+
+            return _checked
+
         items = []
         for name in self._available_models:
             items.append(
                 pystray.MenuItem(
                     name,
-                    lambda _icon, _item, model_name=name: self._menu_select_model(model_name),
-                    checked=lambda _item, model_name=name: self.model_name == model_name,
+                    _make_select_action(name),
+                    checked=_make_checked_action(name),
                     enabled=lambda _item: not self._model_switch_in_progress,
                 )
             )
@@ -777,7 +797,7 @@ class FoundryTranscribeTrayApp:
             pystray.MenuItem(toggle_label, self._menu_toggle_hook),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(model_label, lambda *_: None, enabled=False),
-            pystray.MenuItem("Whisper model", self._build_model_submenu()),
+            pystray.MenuItem("Whisper model", self._build_model_submenu),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(mic_label, lambda *_: None, enabled=False),
             pystray.Menu.SEPARATOR,
