@@ -1,0 +1,14 @@
+[project]
+name = "foundrylocalwhispr"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "foundry-local-sdk-winml>=1.2.3",
+    "numpy>=2.3.2",
+    "openai>=2.46.0",
+    "pillow>=11.3.0",
+    "pystray>=0.19.5",
+    "sounddevice>=0.5.2",
+]

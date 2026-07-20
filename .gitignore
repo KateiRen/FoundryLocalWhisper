@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local editor state
+.vscode/
+.python-version
+
+# App runtime artifacts
+transcribe.log
+transcribe_config.json
+transcription_history.jsonl
+
+# Local sample audio
+sample-speech*.wav
