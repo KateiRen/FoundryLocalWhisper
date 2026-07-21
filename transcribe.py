@@ -741,6 +741,57 @@ class FoundryTranscribeTrayApp:
 
         threading.Thread(target=_switch, daemon=True).start()
 
+    def _menu_select_mic(self, device_index: int) -> None:
+        if device_index == self._input_device:
+            return
+
+        if self.recording:
+            logging.info("Cannot switch microphone while recording")
+            return
+
+        if not self._is_valid_input_device(device_index):
+            logging.warning("Selected mic %s is no longer available", device_index)
+            self._rebuild_menu()
+            return
+
+        self._input_device = device_index
+        self._config["mic_index"] = device_index
+        self._save_config()
+        logging.info("Switched microphone to: %s", device_index)
+        self._refresh_icon()
+        self._rebuild_menu()
+
+    def _build_mic_submenu(self) -> pystray.Menu:
+        inputs = self._list_input_devices()
+        if not inputs:
+            return pystray.Menu(
+                pystray.MenuItem("No microphones found", lambda *_: None, enabled=False)
+            )
+
+        def _make_select_action(device_index: int):
+            def _action(_icon, _item):
+                self._menu_select_mic(device_index)
+
+            return _action
+
+        def _make_checked_action(device_index: int):
+            def _checked(_item):
+                return self._input_device == device_index
+
+            return _checked
+
+        items = []
+        for idx, name, _channels in inputs:
+            items.append(
+                pystray.MenuItem(
+                    f"[{idx}] {name}",
+                    _make_select_action(idx),
+                    checked=_make_checked_action(idx),
+                    enabled=lambda _item: not self.recording,
+                )
+            )
+        return pystray.Menu(*items)
+
     def _build_model_submenu(self) -> pystray.Menu:
         if not self._available_models:
             return pystray.Menu(pystray.MenuItem("No models found", lambda *_: None, enabled=False))
@@ -809,6 +860,7 @@ class FoundryTranscribeTrayApp:
             pystray.MenuItem("Whisper model", self._build_model_submenu()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(mic_label, lambda *_: None, enabled=False),
+            pystray.MenuItem("Microphone", self._build_mic_submenu()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 "Auto-paste at cursor",
