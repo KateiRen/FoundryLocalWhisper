@@ -6,7 +6,7 @@ This is [Whisper](https://openai.com/index/whisper/), the speech recignition sys
 
 At first, this is supposed to become my personal dictation helper to gain speed and productivity when instructing my pilots and refining results or simply taking notes.
 
-Secondly, this became the playground to evaluate the power and flexibility offered by Microsoft Foundry Local.
+Secondly, this became the playground to evaluate the power and flexibility offered by **Microsoft Foundry Local**.
 
 
 ## Learnings
