@@ -23,6 +23,7 @@ from foundry_local_sdk import Configuration, FoundryLocalManager
 SAMPLE_RATE = 16000
 CHANNELS = 1
 MIN_HOLD_MS = 120
+MAX_RECORD_S = 30.0  # Whisper's fixed input window; longer audio is not usable
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 HISTORY_PATH = SCRIPT_DIR / "transcription_history.jsonl"
@@ -154,6 +155,160 @@ def append_transcript_log(ts: str, text: str) -> None:
         logging.exception("Failed writing transcript log")
 
 
+_WAV_DTYPES = {1: np.uint8, 2: np.int16, 4: np.int32}
+
+
+def _read_wav_pcm(path: Path) -> tuple[np.ndarray, int, int, int] | None:
+    """Read a PCM WAV file into a (n_frames, n_channels) int array.
+
+    Returns (frames, sample_rate, n_channels, sampwidth), or None if the
+    file is not a WAV file or uses a sample width we don't handle (e.g.
+    24-bit), so the caller can fall back to passing the path through as-is.
+    """
+    try:
+        wf: Any = wave.open(str(path), "rb")
+    except (wave.Error, EOFError, OSError):
+        return None
+
+    try:
+        n_channels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        sample_rate = wf.getframerate()
+        n_frames = wf.getnframes()
+        raw = wf.readframes(n_frames)
+    finally:
+        wf.close()
+
+    dtype = _WAV_DTYPES.get(sampwidth)
+    if dtype is None:
+        return None
+
+    frames = np.frombuffer(raw, dtype=dtype)
+    if n_channels > 1:
+        frames = frames.reshape(-1, n_channels)
+    else:
+        frames = frames.reshape(-1, 1)
+
+    return frames, sample_rate, n_channels, sampwidth
+
+
+def _probe_audio_duration_s(path: Path) -> float | None:
+    """Best-effort duration probe for files we can't decode ourselves.
+
+    Uses only the WAV header (nframes/framerate), which the wave module can
+    read even for sample widths (e.g. 24-bit) we don't decode to numpy for
+    chunking. Returns None if the file isn't a readable WAV at all (e.g.
+    mp3), in which case duration is unknown and we can't warn about length.
+    """
+    try:
+        wf: Any = wave.open(str(path), "rb")
+    except (wave.Error, EOFError, OSError):
+        return None
+
+    try:
+        n_frames = wf.getnframes()
+        sample_rate = wf.getframerate()
+    finally:
+        wf.close()
+
+    if sample_rate <= 0:
+        return None
+    return n_frames / sample_rate
+
+
+def _write_wav_pcm(
+    path: Path,
+    frames: np.ndarray,
+    sample_rate: int,
+    n_channels: int,
+    sampwidth: int,
+) -> None:
+    wf: Any = wave.open(str(path), "wb")
+    try:
+        wf.setnchannels(n_channels)
+        wf.setsampwidth(sampwidth)
+        wf.setframerate(sample_rate)
+        wf.writeframes(np.ascontiguousarray(frames).tobytes())
+    finally:
+        wf.close()
+
+
+def _quietest_split_point(
+    frames: np.ndarray,
+    floor: int,
+    target: int,
+    search_window: int,
+    frame_len: int = 320,
+) -> int:
+    """Find the quietest short frame in (target - search_window, target].
+
+    Only searches *backward* from target so the resulting chunk never
+    exceeds the caller's max-length budget. Falls back to a hard cut at
+    ``target`` if no room to search or the audio never goes quiet.
+    """
+    lo = max(floor, target - search_window)
+    hi = min(target, len(frames))
+    if hi - lo < frame_len:
+        return hi
+
+    mono = frames[lo:hi].astype(np.float64)
+    if mono.ndim == 2:
+        mono = mono.mean(axis=1)
+
+    hop = max(1, frame_len // 2)
+    best_idx = hi
+    best_energy = None
+    i = 0
+    while i + frame_len <= len(mono):
+        segment = mono[i : i + frame_len]
+        energy = float(np.sqrt(np.mean(segment**2)))
+        if best_energy is None or energy < best_energy:
+            best_energy = energy
+            best_idx = lo + i + frame_len // 2
+        i += hop
+
+    return best_idx
+
+
+def split_audio_on_silence(
+    frames: np.ndarray,
+    sample_rate: int,
+    max_chunk_s: float = MAX_RECORD_S,
+    search_window_s: float = 1.5,
+) -> list[np.ndarray]:
+    """Split long audio into <=max_chunk_s pieces, preferring quiet points.
+
+    Rather than hard-cutting every ``max_chunk_s`` seconds (which risks
+    slicing a chunk in the middle of a word) or overlapping chunks (which
+    needs fuzzy text de-duplication at the seams), this looks backward from
+    each target cut point for the quietest short window - typically a
+    pause between words or sentences - and splits there instead.
+    """
+    total = len(frames)
+    max_chunk_samples = int(max_chunk_s * sample_rate)
+    search_window_samples = int(search_window_s * sample_rate)
+
+    if total <= max_chunk_samples:
+        return [frames]
+
+    chunks: list[np.ndarray] = []
+    start = 0
+    while start < total:
+        remaining = total - start
+        if remaining <= max_chunk_samples:
+            chunks.append(frames[start:total])
+            break
+
+        target = start + max_chunk_samples
+        split = _quietest_split_point(frames, start, target, search_window_samples)
+        if split <= start:
+            split = target
+        chunks.append(frames[start:split])
+        start = split
+
+    return chunks
+
+
 def create_mic_icon(recording: bool = False) -> Image.Image:
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -228,6 +383,8 @@ class FoundryTranscribeTrayApp:
         self.recording = False
         self.audio_chunks: list[np.ndarray] = []
         self._stream: sd.InputStream | None = None
+        self._max_duration_timer: threading.Timer | None = None
+        self._shutting_down = False
 
         self._ctrl_held = False
         self._win_held = False
@@ -436,6 +593,12 @@ class FoundryTranscribeTrayApp:
         self.recording = True
         self.audio_chunks = []
 
+        # Give instant feedback before touching the audio device: opening a
+        # WASAPI input stream can take tens to hundreds of ms, and doing it
+        # before the beep/icon update makes the hold gesture feel laggy.
+        self._refresh_icon()
+        beep_async(600, 80)
+
         def _on_audio(indata, _frames, _time, status):
             if status:
                 logging.warning("Audio status: %s", status)
@@ -449,22 +612,43 @@ class FoundryTranscribeTrayApp:
             callback=_on_audio,
         )
         self._stream.start()
-        self._refresh_icon()
-        beep_async(600, 80)
+
+        self._max_duration_timer = threading.Timer(MAX_RECORD_S, self._on_max_duration_reached)
+        self._max_duration_timer.daemon = True
+        self._max_duration_timer.start()
+
         logging.info("Recording started (hold Ctrl+Win)")
+
+    def _on_max_duration_reached(self) -> None:
+        with self._lock:
+            if not self.recording:
+                return
+            logging.info(
+                "Max recording duration (%.0fs) reached, stopping automatically",
+                MAX_RECORD_S,
+            )
+            beep_async(1000, 120)
+            self._stop_recording()
 
     def _stop_recording(self) -> None:
         if not self.recording:
             return
 
         self.recording = False
+
+        if self._max_duration_timer is not None:
+            self._max_duration_timer.cancel()
+            self._max_duration_timer = None
+
+        # Same reasoning as _start_recording: signal the state change first,
+        # then pay the (potentially slow) stream teardown cost.
+        self._refresh_icon()
+        beep_async(900, 90)
+
         if self._stream is not None:
             self._stream.stop()
             self._stream.close()
             self._stream = None
-
-        self._refresh_icon()
-        beep_async(900, 90)
 
         if not self.audio_chunks:
             logging.info("No audio captured")
@@ -516,7 +700,7 @@ class FoundryTranscribeTrayApp:
                 logging.info("Transcription: %s", text)
                 append_transcript_log(ts, text)
                 set_clipboard_text(text)
-                if self.auto_paste:
+                if self.auto_paste and not self._shutting_down:
                     simulate_ctrl_v()
                 beep_async(1200, 80)
                 self._append_history(
@@ -615,6 +799,9 @@ class FoundryTranscribeTrayApp:
                 with self._lock:
                     if hold_ms < MIN_HOLD_MS:
                         self.recording = False
+                        if self._max_duration_timer is not None:
+                            self._max_duration_timer.cancel()
+                            self._max_duration_timer = None
                         if self._stream is not None:
                             self._stream.stop()
                             self._stream.close()
@@ -823,6 +1010,7 @@ class FoundryTranscribeTrayApp:
     def _menu_quit(self, icon, _item) -> None:
         logging.info("Shutting down")
         self._hook_enabled = False
+        self._shutting_down = True
 
         if self.recording:
             with self._lock:
@@ -895,6 +1083,115 @@ class FoundryTranscribeTrayApp:
         logging.info("Ready. Hold Ctrl+Win to dictate.")
         self._tray.run()
 
+    def transcribe_file(self, input_path: Path, output_path: Path) -> None:
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input audio file not found: {input_path}")
+
+        self._resolve_model_name()
+        self._initialize_foundry()
+
+        logging.info("Transcribing file: %s", input_path)
+        t0 = time.monotonic()
+
+        wav_data = _read_wav_pcm(input_path)
+        if wav_data is None:
+            # Not a WAV file (or an unsupported sample width) - hand the
+            # whole file to Core as-is, same as before. We can't safely
+            # chunk audio we can't decode ourselves.
+            duration_s = _probe_audio_duration_s(input_path)
+            if duration_s is not None and duration_s > MAX_RECORD_S:
+                logging.warning(
+                    "Audio is %.1fs, which exceeds the model's %.0fs window, but it can't be "
+                    "chunked (unsupported audio format/sample width). Proceeding with a single "
+                    "pass - the transcription may be truncated.",
+                    duration_s,
+                    MAX_RECORD_S,
+                )
+            response = self._audio_client.transcribe(str(input_path))
+            text = response.text.strip() if hasattr(response, "text") else str(response).strip()
+            output_path.write_text(text, encoding="utf-8")
+            logging.info("Wrote transcription to %s", output_path)
+            print(text)
+            self._log_transcription_speed(time.monotonic() - t0, duration_s, text)
+            return
+
+        frames, sample_rate, n_channels, sampwidth = wav_data
+        duration_s = len(frames) / sample_rate
+        chunks = split_audio_on_silence(frames, sample_rate)
+
+        if len(chunks) == 1:
+            logging.info("Audio is %.1fs, within the %.0fs window - single pass", duration_s, MAX_RECORD_S)
+        else:
+            logging.info(
+                "Audio is %.1fs, splitting into %d chunks (<=%.0fs each) at quiet points",
+                duration_s,
+                len(chunks),
+                MAX_RECORD_S,
+            )
+
+        texts: list[str] = []
+        for i, chunk in enumerate(chunks):
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                    tmp_path = Path(tmp_file.name)
+                _write_wav_pcm(tmp_path, chunk, sample_rate, n_channels, sampwidth)
+
+                chunk_s = len(chunk) / sample_rate
+                logging.info("Transcribing chunk %d/%d (%.1fs)", i + 1, len(chunks), chunk_s)
+                response = self._audio_client.transcribe(str(tmp_path))
+                chunk_text = response.text.strip() if hasattr(response, "text") else str(response).strip()
+                if chunk_text:
+                    texts.append(chunk_text)
+            finally:
+                if tmp_path is not None:
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+        text = " ".join(texts)
+        output_path.write_text(text, encoding="utf-8")
+        logging.info("Wrote transcription to %s", output_path)
+        print(text)
+        self._log_transcription_speed(time.monotonic() - t0, duration_s, text)
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        """Format seconds as e.g. '42.3s', '3m 05s', or '1h 02m 03s'."""
+        total = round(seconds, 1)
+        hours, remainder = divmod(total, 3600)
+        minutes, secs = divmod(remainder, 60)
+
+        if hours >= 1:
+            return f"{int(hours)}h {int(minutes):02d}m {int(secs):02d}s"
+        if minutes >= 1:
+            return f"{int(minutes)}m {int(secs):02d}s"
+        return f"{secs:.1f}s"
+
+    @staticmethod
+    def _log_transcription_speed(elapsed_s: float, audio_s: float | None, text: str) -> None:
+        word_count = len(text.split())
+        # The API doesn't expose real model token usage, so approximate using
+        # the common ~0.75 words-per-token heuristic for English BPE tokenizers.
+        approx_tokens = round(word_count / 0.75) if word_count else 0
+        tokens_per_s = approx_tokens / elapsed_s if elapsed_s > 0 else float("inf")
+
+        elapsed_msg = f"Transcribed in {FoundryTranscribeTrayApp._format_duration(elapsed_s)}"
+        counts_msg = f"{word_count} words, ~{approx_tokens} tokens ({tokens_per_s:.1f} tokens/s)"
+        if not audio_s:
+            logging.info("%s (audio length unknown), %s", elapsed_msg, counts_msg)
+            return
+
+        speed = audio_s / elapsed_s if elapsed_s > 0 else float("inf")
+        logging.info(
+            "%s for %s of audio (%.2fx realtime speed), %s",
+            elapsed_msg,
+            FoundryTranscribeTrayApp._format_duration(audio_s),
+            speed,
+            counts_msg,
+        )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -921,7 +1218,25 @@ def main() -> None:
         action="store_true",
         help="Ask for a new microphone and save it to config",
     )
+    parser.add_argument(
+        "--transcribe-file",
+        type=Path,
+        default=None,
+        help=(
+            "Transcribe this audio file instead of running the tray app "
+            "(requires --output-file)"
+        ),
+    )
+    parser.add_argument(
+        "--output-file",
+        type=Path,
+        default=None,
+        help="Text file to write the transcription to (used with --transcribe-file)",
+    )
     args = parser.parse_args()
+
+    if bool(args.transcribe_file) != bool(args.output_file):
+        parser.error("--transcribe-file and --output-file must be used together")
 
     configure_logging()
     app = FoundryTranscribeTrayApp(
@@ -930,6 +1245,11 @@ def main() -> None:
         mic_index=args.mic_index,
         force_select_mic=args.select_mic,
     )
+
+    if args.transcribe_file:
+        app.transcribe_file(args.transcribe_file, args.output_file)
+        return
+
     app.run()
 
 
