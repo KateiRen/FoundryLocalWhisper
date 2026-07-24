@@ -25,6 +25,16 @@ CHANNELS = 1
 MIN_HOLD_MS = 120
 MAX_RECORD_S = 30.0  # Whisper's fixed input window; longer audio is not usable
 
+# BYO Qualcomm QNN-accelerated model, loaded directly via onnxruntime-qnn
+# instead of the Foundry Local SDK (which cannot load this ONNX format).
+QNN_BYO_MODEL_NAME = "whisper-large-v3-turbo-qnn"
+QNN_MODEL_DIR = (
+    Path(__file__).resolve().parent
+    / "BYO-Models"
+    / "whisper_large_v3_turbo"
+    / "whisper_large_v3_turbo-precompiled_qnn_onnx-float-qualcomm_snapdragon_x_elite"
+)
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 HISTORY_PATH = SCRIPT_DIR / "transcription_history.jsonl"
 APP_LOG_PATH = SCRIPT_DIR / "transcribe.log"
@@ -412,6 +422,7 @@ class FoundryTranscribeTrayApp:
         self._manager = None
         self._model_switch_in_progress = False
         self._available_models: list[str] = []
+        self._qnn_pipeline = None
 
         self._config = self._load_config()
         self._input_device: int | None = None
@@ -464,7 +475,10 @@ class FoundryTranscribeTrayApp:
             except (KeyError, RuntimeError, ValueError, TypeError):
                 continue
 
-        return model_ids or [self.model_name]
+        result = model_ids or [self.model_name]
+        if QNN_MODEL_DIR.exists() and QNN_BYO_MODEL_NAME not in result:
+            result.append(QNN_BYO_MODEL_NAME)
+        return result
 
     @staticmethod
     def _load_config() -> dict:
@@ -585,6 +599,20 @@ class FoundryTranscribeTrayApp:
         logging.info("Foundry model loaded: %s", self.model_name)
 
     def _load_speech_model(self, model_name: str) -> None:
+        if model_name == QNN_BYO_MODEL_NAME:
+            if self._qnn_pipeline is None:
+                from qnn_whisper import QnnWhisperPipeline
+
+                logging.info("Loading QNN BYO model: %s", model_name)
+                self._qnn_pipeline = QnnWhisperPipeline()
+            self._speech_model = None
+            self._audio_client = None
+            self.model_name = model_name
+            logging.info(
+                "Model '%s' running on Qualcomm QNN NPU (onnxruntime-qnn)", model_name
+            )
+            return
+
         if self._manager is None:
             raise RuntimeError("Foundry manager not initialized")
 
@@ -696,10 +724,7 @@ class FoundryTranscribeTrayApp:
             daemon=True,
         ).start()
 
-    def _transcribe(self, audio: np.ndarray, duration_s: float) -> None:
-        ts = datetime.now(timezone.utc).isoformat()
-        t0 = time.monotonic()
-
+    def _transcribe_via_foundry(self, audio: np.ndarray) -> str:
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -720,7 +745,23 @@ class FoundryTranscribeTrayApp:
                 wf.close()
 
             response = self._audio_client.transcribe(str(tmp_path))
-            text = response.text.strip() if hasattr(response, "text") else str(response).strip()
+            return response.text.strip() if hasattr(response, "text") else str(response).strip()
+        finally:
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def _transcribe(self, audio: np.ndarray, duration_s: float) -> None:
+        ts = datetime.now(timezone.utc).isoformat()
+        t0 = time.monotonic()
+
+        try:
+            if self.model_name == QNN_BYO_MODEL_NAME:
+                text = self._qnn_pipeline.transcribe(audio)
+            else:
+                text = self._transcribe_via_foundry(audio)
             elapsed = time.monotonic() - t0
 
             if text:
@@ -765,12 +806,6 @@ class FoundryTranscribeTrayApp:
                     "error": str(exc),
                 }
             )
-        finally:
-            if tmp_path is not None:
-                try:
-                    tmp_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
 
     @staticmethod
     def _append_history(entry: dict) -> None:

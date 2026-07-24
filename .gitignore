@@ -13,6 +13,9 @@ wheels/
 .vscode/
 .python-version
 
+# Downloaded assets (e.g. mel filterbank) for the QNN whisper pipeline
+.cache/
+
 # App runtime artifacts
 transcribe.log
 transcribe_config.json
