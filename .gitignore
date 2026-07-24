@@ -23,3 +23,6 @@ sample-speech*.wav
 
 # Local transcriptions
 *.txt
+
+# Debug logs
+run_crash.log

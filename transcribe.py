@@ -29,6 +29,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 HISTORY_PATH = SCRIPT_DIR / "transcription_history.jsonl"
 APP_LOG_PATH = SCRIPT_DIR / "transcribe.log"
 CONFIG_PATH = SCRIPT_DIR / "transcribe_config.json"
+MIC_ICON_PATH = SCRIPT_DIR / "mic.png"
+MIC_ICON_RECORDING_PATH = SCRIPT_DIR / "mic_rec.png"
 
 VK_LCONTROL = 0xA2
 VK_RCONTROL = 0xA3
@@ -309,7 +311,7 @@ def split_audio_on_silence(
     return chunks
 
 
-def create_mic_icon(recording: bool = False) -> Image.Image:
+def _draw_fallback_mic_icon(recording: bool) -> Image.Image:
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     color = (220, 50, 50, 255) if recording else (55, 130, 240, 255)
@@ -318,6 +320,15 @@ def create_mic_icon(recording: bool = False) -> Image.Image:
     draw.rounded_rectangle((29, 30, 35, 48), radius=3, fill=color)
     draw.rounded_rectangle((20, 46, 44, 52), radius=2, fill=color)
     return img
+
+
+def create_mic_icon(recording: bool = False) -> Image.Image:
+    icon_path = MIC_ICON_RECORDING_PATH if recording else MIC_ICON_PATH
+    try:
+        return Image.open(icon_path).convert("RGBA")
+    except (OSError, ValueError):
+        logging.exception("Failed to load tray icon %s, using fallback", icon_path)
+        return _draw_fallback_mic_icon(recording)
 
 
 def set_clipboard_text(text: str) -> None:
