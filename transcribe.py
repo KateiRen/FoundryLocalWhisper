@@ -586,6 +586,17 @@ class FoundryTranscribeTrayApp:
         self._audio_client = speech_model.get_audio_client()
         self.model_name = model_name
 
+        runtime = speech_model.info.runtime
+        if runtime is not None:
+            logging.info(
+                "Model '%s' running on %s (%s)",
+                model_name,
+                runtime.device_type,
+                runtime.execution_provider,
+            )
+        else:
+            logging.info("Model '%s' runtime info unavailable", model_name)
+
     def _start_recording(self) -> None:
         if self.recording:
             return
