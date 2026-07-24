@@ -17,13 +17,12 @@ The project was inspired by this [WhisprFlow](https://github.com/dpraj007/whispr
 
 Then I turned to the [offical Foundry Local documentation and sample code](https://learn.microsoft.com/en-us/azure/foundry-local/tutorials/tutorial-build-voice-to-text-note-taker?tabs=windows&pivots=programming-language-python) and was surprised how versatile Foundry Local handles hardware abstraction while recognizng available accelerators (GPU, NPU) and flexibly load the appropriate execution provider. 
 
-On my Surface Laptop 7 (Snapdragon(R) X 12-core XIE80100) it detects the NPU and loads
+On my Surface Laptop 7 (Snapdragon(R) X 12-core XIE80100) it detects the GPU and NPU and loads execution providers
 - WebGpuExecutionProvider and
 - QNNExecutionProvider
 
-On my PC with (NVIDIA GeForce RTX 2060 SUPER) it detects the GPU and automatically installs the 
+On my PC (with a NVIDIA GeForce RTX 2060 SUPER) it detects the GPU and automatically installs the 
 - CUDAExecutionProvider
-
 
 
 
