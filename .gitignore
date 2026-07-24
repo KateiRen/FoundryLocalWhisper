@@ -26,3 +26,6 @@ sample-speech*.wav
 
 # Debug logs
 run_crash.log
+
+# Large precompiled QNN context binaries (100MB+ GitHub push limit)
+BYO-Models/**/*.bin
