@@ -20,3 +20,6 @@ transcription_history.jsonl
 
 # Local sample audio
 sample-speech*.wav
+
+# Local transcriptions
+*.txt
