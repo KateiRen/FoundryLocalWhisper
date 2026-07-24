@@ -676,6 +676,11 @@ class FoundryTranscribeTrayApp:
             logging.info("No audio captured")
             return
 
+        if self._shutting_down:
+            logging.info("Discarding in-progress recording (shutting down)")
+            self.audio_chunks = []
+            return
+
         audio = np.concatenate(self.audio_chunks, axis=0).squeeze()
         self.audio_chunks = []
         duration_s = len(audio) / SAMPLE_RATE
