@@ -137,3 +137,22 @@ uv run transcribe.py --select-mic
 ```
 
 - Forces a new microphone selection prompt and saves the new choice.
+
+
+### Transcribing an audio file
+
+Use `--transcribe-file` together with `--output-file` to transcribe an existing audio file instead of starting the tray app:
+
+```
+uv run transcribe.py --transcribe-file recording.wav --output-file recording.txt
+```
+
+The selected or configured Whisper model is loaded, the transcription is printed to the terminal, and the complete text is written to the specified output file. Use `--model-name` to select a model for this run:
+
+```
+uv run transcribe.py --model-name whisper-small --transcribe-file recording.wav --output-file recording.txt
+```
+
+For supported PCM WAV files (8-bit, 16-bit, or 32-bit), audio longer than Whisper's 30-second input window is split into chunks of at most 30 seconds. The splitter looks for a quiet point near each boundary to reduce cuts in the middle of spoken words. Each chunk is transcribed separately, and the results are joined into one output file.
+
+Other formats, including MP3 and unsupported WAV encodings such as 24-bit PCM, are passed to the model in a single operation because the app cannot safely split them. Files longer than 30 seconds may therefore be truncated; convert them to a supported PCM WAV format first when processing longer recordings.
