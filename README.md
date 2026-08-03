@@ -8,6 +8,10 @@ At first, this is supposed to become my personal dictation helper to gain speed 
 
 Secondly, this became the playground to evaluate the power and flexibility offered by **Microsoft Foundry Local**.
 
+**Modes of operation**
+1. Upon Keypress: record audio, transcribe the speech, paste at the current cursor position (default)
+2. Transcribe an audio file to a text file (command line option only)
+
 
 ## Learnings
 
