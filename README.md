@@ -24,9 +24,11 @@ On my Surface Laptop 7 (Snapdragon(R) X 12-core XIE80100) it detects the GPU and
 On my PC (with a NVIDIA GeForce RTX 2060 SUPER) it detects the GPU and automatically installs the 
 - CUDAExecutionProvider
 
-
+Sadly, Foundry Local does not come with a NPU whisper model in it's catalogue. That's why I added qnn_whisper.py as an alternate path to run a qualcomm optimized for NPU model (whisper_large_v3_turbo).
 
 ## Installing
+
+### Foundry Local Whisper
 
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management and requires Python >=3.11,<3.13 (see `pyproject.toml`).
 
@@ -40,16 +42,46 @@ uv sync
 
 This creates a `.venv` and installs `foundry-local-sdk-winml`, `numpy`, `openai`, `pillow`, `pystray`, and `sounddevice` as declared in `pyproject.toml`. Microsoft Foundry Local itself handles downloading and registering the appropriate execution provider (CUDA, QNN, WebGPU, etc.) for your hardware on first run.
 
+### QNN-Whisper
+
+The optional QNN backend runs Whisper Large V3 Turbo directly on the Qualcomm
+NPU through `onnxruntime-qnn`. The model is supplied by **Qualcomm AI Hub**, not
+Broadcom. A Qualcomm account is required to download the precompiled model.
+
+1. Open the [Whisper-Large-V3-Turbo model page on Qualcomm AI Hub](https://aihub.qualcomm.com/models/whisper_large_v3_turbo) and sign in or create a Qualcomm account.
+2. Select **Snapdragon X Elite CRD** as the target device and **ONNX Runtime** as the runtime.
+3. Choose the **float** model and click **Download Model**. Download the precompiled QNN ONNX package for Snapdragon X Elite.
+4. Extract the downloaded archive into the following directory:
+
+```text
+BYO-Models/
+└── whisper_large_v3_turbo/
+	└── whisper_large_v3_turbo-precompiled_qnn_onnx-float-qualcomm_snapdragon_x_elite/
+		├── decoder.onnx
+		├── decoder_qairt_context.bin
+		├── encoder.onnx
+		├── encoder_qairt_context.bin
+		└── metadata.json
+```
+
+The directory and filenames must match this layout because `qnn_whisper.py`
+loads them from that fixed location. The `.bin` files are larger than GitHub's
+file-size limit and are excluded from this repository, so each installation
+must obtain them from Qualcomm AI Hub.
+
+After the files are present, run the normal tray application:
+
+```text
+uv run transcribe.py
+```
+
+Select `whisper-large-v3-turbo-qnn` from the **Whisper model** tray submenu.
+The QNN option is added only when the model directory is present. The Foundry
+Local Whisper models remain usable without this download.
+
+
 
 ## Usage
-
-### Command-line demo
-
-`app.py` is still the unmodified demo from the [official Foundry Local voice-to-text note-taker tutorial](https://learn.microsoft.com/en-us/azure/foundry-local/tutorials/tutorial-build-voice-to-text-note-taker?tabs=windows&pivots=programming-language-python). It downloads and loads `whisper-tiny` to transcribe `sample-speech.wav`, then downloads and loads `qwen2.5-0.5b` to summarize that transcription into bullet-point notes:
-
-```
-uv run app.py
-```
 
 ### Transcribe Tray App
 
@@ -70,6 +102,8 @@ Behavior:
 ### Starting without a console window
 
 `uv run transcribe.py` keeps a terminal window open for the lifetime of the app. To launch it as a silent background tray app instead, double-click [`start_transcribe.vbs`](start_transcribe.vbs) (or point a shortcut, Start Menu entry, or your `shell:startup` folder at it). It runs `uv run transcribe.py` hidden, with no console window, from the script's own folder.
+
+For the first start, use `uv run transcribe.py` in a terminal instead of the hidden VBS launcher. Downloading and loading the execution providers and model can take some time, and the terminal keeps that setup progress and any prompts visible. Once the first startup has completed successfully, the VBS launcher is suitable for normal use.
 
 ### Systray menu
 

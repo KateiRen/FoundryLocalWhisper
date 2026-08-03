@@ -818,11 +818,12 @@ class FoundryTranscribeTrayApp:
         except OSError:
             logging.exception("Failed writing transcription history")
 
-    def _refresh_icon(self) -> None:
+    def _refresh_icon(self, update_image: bool = True) -> None:
         if self._tray is None:
             return
 
-        self._tray.icon = create_mic_icon(self.recording)
+        if update_image:
+            self._tray.icon = create_mic_icon(self.recording)
         if self.recording:
             self._tray.title = "Foundry Transcribe | Recording..."
         elif not self._hook_enabled:
@@ -947,7 +948,7 @@ class FoundryTranscribeTrayApp:
                 self._stop_recording()
         state = "enabled" if self._hook_enabled else "disabled"
         logging.info("Dictation %s", state)
-        self._refresh_icon()
+        self._refresh_icon(update_image=False)
         self._rebuild_menu()
 
     def _menu_auto_paste(self, _icon, _item) -> None:

@@ -53,7 +53,10 @@ _MEL_FILTERS_URL = (
     "https://raw.githubusercontent.com/openai/whisper/"
     "c5d42560760a05584c1c79546a098287e5a771eb/whisper/assets/mel_filters.npz"
 )
-_TOKENIZER_REPO = "openai/whisper-large-v3-turbo"
+_TOKENIZER_URL = (
+    "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/"
+    "41f01f3fe87f28c78e2fbf8b568835947dd65ed9/tokenizer.json"
+)
 
 _qnn_ep_registered = False
 
@@ -150,10 +153,8 @@ class QnnWhisperPipeline:
 
     @staticmethod
     def _load_tokenizer() -> Tokenizer:
-        from huggingface_hub import hf_hub_download
-
-        path = hf_hub_download(repo_id=_TOKENIZER_REPO, filename="tokenizer.json")
-        return Tokenizer.from_file(path)
+        path = _download_cached(_TOKENIZER_URL, CACHE_DIR / "tokenizer.json")
+        return Tokenizer.from_file(str(path))
 
     def transcribe(self, audio: np.ndarray) -> str:
         """Transcribe up to 30s of mono float32 audio sampled at 16kHz."""
