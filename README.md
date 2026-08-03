@@ -45,9 +45,9 @@ This creates a `.venv` and installs `foundry-local-sdk-winml`, `numpy`, `openai`
 ### QNN-Whisper
 
 The optional QNN backend runs Whisper Large V3 Turbo directly on the Qualcomm
-NPU through `onnxruntime-qnn`. The model is supplied by **Qualcomm AI Hub**. A Qualcomm account is required to download the precompiled model.
+NPU through `onnxruntime-qnn`. The model is supplied by **Qualcomm AI Hub**. A Qualcomm account might be required to download the precompiled model.
 
-1. Open the [Whisper-Large-V3-Turbo model page on Qualcomm AI Hub](https://aihub.qualcomm.com/models/whisper_large_v3_turbo) and sign in or create a Qualcomm account.
+1. Open the [Whisper-Large-V3-Turbo model page on Qualcomm AI Hub](https://aihub.qualcomm.com/models/whisper_large_v3_turbo).
 2. Select **Snapdragon X Elite CRD** as the target device and **ONNX Runtime** as the runtime.
 3. Choose the **float** model and click **Download Model**. Download the precompiled QNN ONNX package for Snapdragon X Elite.
 4. Extract the downloaded archive into the following directory:
@@ -64,8 +64,7 @@ BYO-Models/
 ```
 
 The directory and filenames must match this layout because `qnn_whisper.py`
-loads them from that fixed location. The `.bin` files are larger than GitHub's
-file-size limit and are excluded from this repository, so each installation
+loads them from that fixed location. The model files are excluded from this repository, so each installation
 must obtain them from Qualcomm AI Hub.
 
 After the files are present, run the normal tray application:
