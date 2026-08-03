@@ -121,6 +121,9 @@ user32.PostThreadMessageW.argtypes = [
 ]
 user32.PostThreadMessageW.restype = ctypes.wintypes.BOOL
 
+user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+user32.GetAsyncKeyState.restype = ctypes.c_short
+
 user32.OpenClipboard.argtypes = [ctypes.wintypes.HWND]
 user32.OpenClipboard.restype = ctypes.wintypes.BOOL
 
@@ -833,18 +836,27 @@ class FoundryTranscribeTrayApp:
     def _is_win(self, vk: int) -> bool:
         return vk in (VK_LWIN, VK_RWIN)
 
+    @staticmethod
+    def _is_key_down(vk: int) -> bool:
+        return bool(user32.GetAsyncKeyState(vk) & 0x8000)
+
     def _on_key_event(self, vk: int, is_down: bool) -> bool:
+        previous_ctrl = self._ctrl_held
+        previous_win = self._win_held
+
         changed = False
 
         if self._is_ctrl(vk):
-            if self._ctrl_held != is_down:
-                self._ctrl_held = is_down
-                changed = True
+            self._ctrl_held = is_down
+            self._win_held = self._is_key_down(VK_LWIN) or self._is_key_down(VK_RWIN)
 
         if self._is_win(vk):
-            if self._win_held != is_down:
-                self._win_held = is_down
-                changed = True
+            self._win_held = is_down
+            self._ctrl_held = self._is_key_down(VK_LCONTROL) or self._is_key_down(VK_RCONTROL)
+
+        changed = (
+            self._ctrl_held != previous_ctrl or self._win_held != previous_win
+        )
 
         if not changed:
             return False
