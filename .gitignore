@@ -31,5 +31,5 @@ sample-speech*.wav
 # Debug logs
 run_crash.log
 
-# Large precompiled QNN context binaries (100MB+ GitHub push limit)
-BYO-Models/**/*.bin
+# Locally installed Qualcomm AI Hub model package
+BYO-Models/whisper_large_v3_turbo/whisper_large_v3_turbo-precompiled_qnn_onnx-float-qualcomm_snapdragon_x_elite/
