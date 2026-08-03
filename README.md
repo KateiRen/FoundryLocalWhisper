@@ -1,4 +1,4 @@
-# Foundry Local Whispr
+# Foundry Local Whisper
 
 ## What this is
 
