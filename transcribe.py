@@ -39,8 +39,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 HISTORY_PATH = SCRIPT_DIR / "transcription_history.jsonl"
 APP_LOG_PATH = SCRIPT_DIR / "transcribe.log"
 CONFIG_PATH = SCRIPT_DIR / "transcribe_config.json"
-MIC_ICON_PATH = SCRIPT_DIR / "mic.png"
-MIC_ICON_RECORDING_PATH = SCRIPT_DIR / "mic_rec.png"
+MIC_ICON_PATH = SCRIPT_DIR / "assets" / "mic.png"
+MIC_ICON_RECORDING_PATH = SCRIPT_DIR / "assets" / "mic_rec.png"
 
 VK_LCONTROL = 0xA2
 VK_RCONTROL = 0xA3

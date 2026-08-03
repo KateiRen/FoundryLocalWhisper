@@ -12,6 +12,7 @@ wheels/
 # Local editor state
 .vscode/
 .python-version
+*.excalidraw
 
 # Downloaded assets (e.g. mel filterbank) for the QNN whisper pipeline
 .cache/
