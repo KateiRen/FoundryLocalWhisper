@@ -10,7 +10,7 @@ import time
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pystray
@@ -620,6 +620,8 @@ class FoundryTranscribeTrayApp:
             raise RuntimeError("Foundry manager not initialized")
 
         speech_model = self._manager.catalog.get_model(model_name)
+        if speech_model is None:
+            raise RuntimeError(f"Foundry model not found: {model_name}")
         speech_model.download(
             lambda p: logging.info("Downloading %s %.1f%%", model_name, p)
         )
@@ -638,6 +640,16 @@ class FoundryTranscribeTrayApp:
             )
         else:
             logging.info("Model '%s' runtime info unavailable", model_name)
+
+    def _require_audio_client(self) -> Any:
+        if self._audio_client is None:
+            raise RuntimeError("Foundry audio client not initialized")
+        return self._audio_client
+
+    def _require_qnn_pipeline(self) -> Any:
+        if self._qnn_pipeline is None:
+            raise RuntimeError("QNN pipeline not initialized")
+        return self._qnn_pipeline
 
     def _start_recording(self) -> None:
         if self.recording:
@@ -747,7 +759,7 @@ class FoundryTranscribeTrayApp:
             finally:
                 wf.close()
 
-            response = self._audio_client.transcribe(str(tmp_path))
+            response = self._require_audio_client().transcribe(str(tmp_path))
             return response.text.strip() if hasattr(response, "text") else str(response).strip()
         finally:
             if tmp_path is not None:
@@ -762,7 +774,7 @@ class FoundryTranscribeTrayApp:
 
         try:
             if self.model_name == QNN_BYO_MODEL_NAME:
-                text = self._qnn_pipeline.transcribe(audio)
+                text = self._require_qnn_pipeline().transcribe(audio)
             else:
                 text = self._transcribe_via_foundry(audio)
             elapsed = time.monotonic() - t0
@@ -1049,7 +1061,7 @@ class FoundryTranscribeTrayApp:
                     f"[{idx}] {name}",
                     _make_select_action(idx),
                     checked=_make_checked_action(idx),
-                    enabled=lambda _item: not self.recording,
+                    enabled=cast(bool, lambda _item: not self.recording),
                 )
             )
         return pystray.Menu(*items)
@@ -1077,7 +1089,7 @@ class FoundryTranscribeTrayApp:
                     name,
                     _make_select_action(name),
                     checked=_make_checked_action(name),
-                    enabled=lambda _item: not self._model_switch_in_progress,
+                    enabled=cast(bool, lambda _item: not self._model_switch_in_progress),
                 )
             )
         return pystray.Menu(*items)
@@ -1182,7 +1194,7 @@ class FoundryTranscribeTrayApp:
                     duration_s,
                     MAX_RECORD_S,
                 )
-            response = self._audio_client.transcribe(str(input_path))
+            response = self._require_audio_client().transcribe(str(input_path))
             text = response.text.strip() if hasattr(response, "text") else str(response).strip()
             output_path.write_text(text, encoding="utf-8")
             logging.info("Wrote transcription to %s", output_path)
@@ -1214,7 +1226,7 @@ class FoundryTranscribeTrayApp:
 
                 chunk_s = len(chunk) / sample_rate
                 logging.info("Transcribing chunk %d/%d (%.1fs)", i + 1, len(chunks), chunk_s)
-                response = self._audio_client.transcribe(str(tmp_path))
+                response = self._require_audio_client().transcribe(str(tmp_path))
                 chunk_text = response.text.strip() if hasattr(response, "text") else str(response).strip()
                 if chunk_text:
                     texts.append(chunk_text)

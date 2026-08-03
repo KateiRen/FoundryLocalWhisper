@@ -133,6 +133,12 @@ def _log_mel_spectrogram(audio: np.ndarray) -> np.ndarray:
     return log_spec.astype(np.float16)[np.newaxis, :, :]
 
 
+def _require_ndarray(value: object, output_name: str) -> np.ndarray:
+    if not isinstance(value, np.ndarray):
+        raise TypeError(f"QNN output '{output_name}' is not a NumPy array")
+    return value
+
+
 class QnnWhisperPipeline:
     """Runs whisper-large-v3-turbo transcription entirely on the QNN NPU."""
 
@@ -143,12 +149,14 @@ class QnnWhisperPipeline:
         self._decoder_output_names = [o.name for o in self._decoder.get_outputs()]
 
         self._tokenizer = self._load_tokenizer()
-        self._sot = self._tokenizer.token_to_id("<|startoftranscript|>")
-        self._eot = self._tokenizer.token_to_id("<|endoftext|>")
-        if self._sot is None or self._eot is None:
+        sot = self._tokenizer.token_to_id("<|startoftranscript|>")
+        eot = self._tokenizer.token_to_id("<|endoftext|>")
+        if sot is None or eot is None:
             raise RuntimeError(
                 "Could not find <|startoftranscript|>/<|endoftext|> tokens in tokenizer."
             )
+        self._sot = sot
+        self._eot = eot
         logger.info("QNN whisper pipeline ready")
 
     @staticmethod
@@ -172,13 +180,13 @@ class QnnWhisperPipeline:
         position_ids = np.array([0], dtype=np.int32)
         attention_mask = np.full((1, 1, 1, MEAN_DECODE_LEN), MASK_NEG, dtype=np.float16)
 
-        k_cache_self = {
+        k_cache_self: dict[str, np.ndarray] = {
             f"k_cache_self_{i}_in": np.zeros(
                 (NUM_HEADS, 1, HEAD_DIM, MEAN_DECODE_LEN - 1), dtype=np.float16
             )
             for i in range(NUM_DECODER_LAYERS)
         }
-        v_cache_self = {
+        v_cache_self: dict[str, np.ndarray] = {
             f"v_cache_self_{i}_in": np.zeros(
                 (NUM_HEADS, 1, MEAN_DECODE_LEN - 1, HEAD_DIM), dtype=np.float16
             )
@@ -200,7 +208,7 @@ class QnnWhisperPipeline:
             outputs = self._decoder.run(None, feed)
             out = dict(zip(self._decoder_output_names, outputs))
 
-            logits = out["logits"]  # [1, vocab, 1, 1]
+            logits = _require_ndarray(out["logits"], "logits")  # [1, vocab, 1, 1]
             next_id = int(np.argmax(logits[0, :, 0, 0]))
             output_ids.append(next_id)
 
@@ -208,8 +216,10 @@ class QnnWhisperPipeline:
                 break
 
             for i in range(NUM_DECODER_LAYERS):
-                k_cache_self[f"k_cache_self_{i}_in"] = out[f"k_cache_self_{i}_out"]
-                v_cache_self[f"v_cache_self_{i}_in"] = out[f"v_cache_self_{i}_out"]
+                k_name = f"k_cache_self_{i}_out"
+                v_name = f"v_cache_self_{i}_out"
+                k_cache_self[f"k_cache_self_{i}_in"] = _require_ndarray(out[k_name], k_name)
+                v_cache_self[f"v_cache_self_{i}_in"] = _require_ndarray(out[v_name], v_name)
             position_ids = position_ids + 1
 
         return output_ids
