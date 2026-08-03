@@ -45,8 +45,7 @@ This creates a `.venv` and installs `foundry-local-sdk-winml`, `numpy`, `openai`
 ### QNN-Whisper
 
 The optional QNN backend runs Whisper Large V3 Turbo directly on the Qualcomm
-NPU through `onnxruntime-qnn`. The model is supplied by **Qualcomm AI Hub**, not
-Broadcom. A Qualcomm account is required to download the precompiled model.
+NPU through `onnxruntime-qnn`. The model is supplied by **Qualcomm AI Hub**. A Qualcomm account is required to download the precompiled model.
 
 1. Open the [Whisper-Large-V3-Turbo model page on Qualcomm AI Hub](https://aihub.qualcomm.com/models/whisper_large_v3_turbo) and sign in or create a Qualcomm account.
 2. Select **Snapdragon X Elite CRD** as the target device and **ONNX Runtime** as the runtime.
@@ -120,7 +119,7 @@ Right-click (or left-click, depending on your OS) the tray icon to access:
 - **Open App Log** — opens `transcribe.log` with the default associated app.
 - **Quit** — stops recording if active, unloads the model, and exits the app.
 
-CLI options:
+### CLI options:
 
 ```
 uv run transcribe.py --mic-index 3
@@ -139,5 +138,3 @@ uv run transcribe.py --select-mic
 ```
 
 - Forces a new microphone selection prompt and saves the new choice.
-
-
