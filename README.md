@@ -113,8 +113,8 @@ Right-click (or left-click, depending on your OS) the tray icon to access:
 
 - **Active (Hold Ctrl+Win) / Paused** — a disabled label showing the current dictation state.
 - **Pause Dictation / Resume Dictation** — toggles whether the Ctrl+Win hotkey starts/stops recording.
-- **Model: `<name>`** — a disabled label showing the currently loaded Whisper model.
-- **Whisper model** — submenu listing every discovered Whisper model (e.g. `whisper-tiny`, `whisper-base`, `whisper-small`, `whisper-medium`, `whisper-large`); pick one to unload the current model and load the selected one on the fly. Disabled while a switch is in progress. The choice is saved to `transcribe_config.json`.
+- **Model: `<name> (<size>)`** — a disabled label showing the currently loaded Whisper model and package size.
+- **Whisper model** — submenu listing every discovered Whisper model with its package size in MB or GB (for example, `whisper-tiny (131 MB)`); pick one to unload the current model and load the selected one on the fly. Disabled while a switch is in progress. The choice is saved to `transcribe_config.json`.
 - **Mic: `[index] name`** — a disabled label showing the currently selected microphone.
 - **Microphone** — submenu listing every detected input device; pick one to switch the active microphone at runtime. Disabled while recording. The choice is saved to `transcribe_config.json`.
 - **Auto-paste at cursor** — toggles whether the transcription is automatically pasted at the current cursor position after dictation.

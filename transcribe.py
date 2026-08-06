@@ -425,6 +425,7 @@ class FoundryTranscribeTrayApp:
         self._manager = None
         self._model_switch_in_progress = False
         self._available_models: list[str] = []
+        self._model_sizes_mb: dict[str, float] = {}
         self._qnn_pipeline = None
 
         self._config = self._load_config()
@@ -473,15 +474,32 @@ class FoundryTranscribeTrayApp:
         model_ids: list[str] = []
         for candidate in sorted(candidates):
             try:
-                catalog.get_model(candidate)
+                catalog_model = catalog.get_model(candidate)
+                if catalog_model is None:
+                    continue
                 model_ids.append(candidate)
+                size_mb = getattr(catalog_model.info, "file_size_mb", None)
+                if isinstance(size_mb, (int, float)) and size_mb > 0:
+                    self._model_sizes_mb[candidate] = float(size_mb)
             except (KeyError, RuntimeError, ValueError, TypeError):
                 continue
 
         result = model_ids or [self.model_name]
-        if QNN_MODEL_DIR.exists() and QNN_BYO_MODEL_NAME not in result:
-            result.append(QNN_BYO_MODEL_NAME)
+        if QNN_MODEL_DIR.exists():
+            if QNN_BYO_MODEL_NAME not in result:
+                result.append(QNN_BYO_MODEL_NAME)
+            self._model_sizes_mb[QNN_BYO_MODEL_NAME] = sum(
+                file.stat().st_size for file in QNN_MODEL_DIR.rglob("*") if file.is_file()
+            ) / 1_000_000
         return result
+
+    def _model_display_name(self, model_name: str) -> str:
+        size_mb = self._model_sizes_mb.get(model_name)
+        if size_mb is None:
+            return model_name
+        if size_mb >= 1000:
+            return f"{model_name} ({size_mb / 1000:.1f} GB)"
+        return f"{model_name} ({size_mb:.0f} MB)"
 
     @staticmethod
     def _load_config() -> dict:
@@ -1086,7 +1104,7 @@ class FoundryTranscribeTrayApp:
         for name in self._available_models:
             items.append(
                 pystray.MenuItem(
-                    name,
+                    self._model_display_name(name),
                     _make_select_action(name),
                     checked=_make_checked_action(name),
                     enabled=cast(bool, lambda _item: not self._model_switch_in_progress),
@@ -1117,7 +1135,7 @@ class FoundryTranscribeTrayApp:
     def _build_menu(self) -> pystray.Menu:
         state_label = "Active (Hold Ctrl+Win)" if self._hook_enabled else "Paused"
         toggle_label = "Pause Dictation" if self._hook_enabled else "Resume Dictation"
-        model_label = f"Model: {self.model_name}"
+        model_label = f"Model: {self._model_display_name(self.model_name)}"
         if self._input_device is None:
             mic_label = "Mic: system default"
         else:

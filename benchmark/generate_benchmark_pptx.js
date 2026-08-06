@@ -6,6 +6,13 @@ const resultsPath = process.argv[2] || path.join(__dirname, "results", "benchmar
 const outputPath = process.argv[3] || path.join(__dirname, "results", "whisper_model_benchmark.pptx");
 const inputName = process.argv[4] || "benchmark audio sample";
 const referenceName = "whisper-large-v3-turbo-qnn";
+const benchmarkHost = {
+  device: "Microsoft Surface Laptop, 7th Edition",
+  processor: "Snapdragon X Elite X1E80100 · 12 cores @ 3.40 GHz",
+  accelerators: "Adreno X1-85 GPU · Hexagon NPU",
+  memory: "32 GB RAM",
+  platform: "Windows 11 Enterprise · build 26200",
+};
 
 if (!fs.existsSync(resultsPath)) {
   throw new Error(`Benchmark results not found: ${resultsPath}`);
@@ -170,37 +177,79 @@ function formatDuration(seconds) {
   steps.forEach(([number, label, value, body], index) => {
     const x = 0.68 + index * 4.15;
     slide.addShape(pptx.ShapeType.rect, {
-      x, y: 1.66, w: 3.62, h: 3.58,
+      x, y: 1.58, w: 3.62, h: 3.08,
       fill: { color: COLORS.paper }, line: { color: COLORS.fog, width: 1 },
     });
     slide.addText(number, {
-      x: x + 0.25, y: 1.92, w: 0.75, h: 0.42, margin: 0,
+      x: x + 0.25, y: 1.83, w: 0.75, h: 0.42, margin: 0,
       fontFace: "Consolas", fontSize: 22, bold: true, color: COLORS.green,
     });
     slide.addText(label, {
-      x: x + 1.02, y: 2.02, w: 1.7, h: 0.2, margin: 0,
+      x: x + 1.02, y: 1.93, w: 1.7, h: 0.2, margin: 0,
       fontSize: 10, bold: true, charSpacing: 1.5, color: COLORS.muted,
     });
     slide.addText(value, {
-      x: x + 0.25, y: 2.67, w: 3.0, h: 0.55, margin: 0,
-      fontFace: "Aptos Display", fontSize: 27, bold: true, color: COLORS.ink,
+      x: x + 0.25, y: 2.48, w: 3.0, h: 0.5, margin: 0,
+      fontFace: "Aptos Display", fontSize: 25, bold: true, color: COLORS.ink,
     });
     slide.addText(body, {
-      x: x + 0.25, y: 3.58, w: 2.95, h: 0.72, margin: 0,
-      fontSize: 14, color: COLORS.muted, breakLine: false,
+      x: x + 0.25, y: 3.32, w: 2.95, h: 0.72, margin: 0,
+      fontSize: 13, color: COLORS.muted, breakLine: false,
     });
   });
+  slide.addShape(pptx.ShapeType.rect, {
+    x: 0.68, y: 4.88, w: 11.92, h: 1.4,
+    fill: { color: COLORS.pine }, line: { color: COLORS.pine },
+  });
+  slide.addText("HOST SYSTEM", {
+    x: 0.95, y: 5.08, w: 2.0, h: 0.18, margin: 0,
+    fontSize: 10, bold: true, charSpacing: 1.2, color: COLORS.lime,
+  });
+  slide.addText(benchmarkHost.device, {
+    x: 0.95, y: 5.43, w: 3.55, h: 0.24, margin: 0,
+    fontSize: 12, bold: true, color: COLORS.white,
+  });
+  slide.addShape(pptx.ShapeType.line, {
+    x: 4.68, y: 5.08, w: 0, h: 0.92,
+    line: { color: COLORS.green, width: 1 },
+  });
+  slide.addText("COMPUTE", {
+    x: 4.98, y: 5.08, w: 1.25, h: 0.18, margin: 0,
+    fontSize: 10, bold: true, charSpacing: 1.2, color: COLORS.lime,
+  });
+  slide.addText(benchmarkHost.processor.replace(" · ", "\n"), {
+    x: 4.98, y: 5.39, w: 3.25, h: 0.5, margin: 0,
+    fontFace: "Aptos", fontSize: 10, bold: true, color: COLORS.white,
+    breakLine: false,
+  });
+  slide.addText(benchmarkHost.accelerators, {
+    x: 4.98, y: 5.92, w: 3.25, h: 0.18, margin: 0,
+    fontSize: 9, color: COLORS.mint,
+  });
+  slide.addShape(pptx.ShapeType.line, {
+    x: 8.48, y: 5.08, w: 0, h: 0.92,
+    line: { color: COLORS.green, width: 1 },
+  });
+  slide.addText("PLATFORM", {
+    x: 8.78, y: 5.08, w: 1.3, h: 0.18, margin: 0,
+    fontSize: 10, bold: true, charSpacing: 1.2, color: COLORS.lime,
+  });
+  slide.addText(`${benchmarkHost.memory}\n${benchmarkHost.platform}`, {
+    x: 8.78, y: 5.4, w: 3.15, h: 0.5, margin: 0,
+    fontFace: "Consolas", fontSize: 9, color: COLORS.white,
+    breakLine: false,
+  });
   slide.addText("Interpretation guardrail", {
-    x: 0.72, y: 5.73, w: 2.1, h: 0.24, margin: 0,
+    x: 0.72, y: 6.48, w: 2.1, h: 0.24, margin: 0,
     fontSize: 12, bold: true, color: COLORS.coral,
   });
   slide.addText("Accuracy is relative to the QNN transcript, not a human-verified ground truth transcript.", {
-    x: 2.52, y: 5.72, w: 8.9, h: 0.28, margin: 0,
-    fontSize: 13, color: COLORS.ink,
+    x: 2.52, y: 6.48, w: 8.9, h: 0.24, margin: 0,
+    fontSize: 12, color: COLORS.ink,
   });
   slide.addText(`Source: ${inputName}`, {
-    x: 0.72, y: 6.42, w: 7.2, h: 0.2, margin: 0,
-    fontFace: "Consolas", fontSize: 9, color: COLORS.muted,
+    x: 0.72, y: 6.86, w: 7.2, h: 0.16, margin: 0,
+    fontFace: "Consolas", fontSize: 8, color: COLORS.muted,
   });
   addFooter(slide, 2);
 }
