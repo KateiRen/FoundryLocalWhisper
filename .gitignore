@@ -28,6 +28,9 @@ sample-speech*.wav
 # Local transcriptions
 *.txt
 
+# Generated benchmark artifacts
+/benchmark/results/
+
 # Debug logs
 run_crash.log
 
