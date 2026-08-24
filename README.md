@@ -160,3 +160,10 @@ uv run transcribe.py --model-name whisper-small --transcribe-file recording.wav 
 For supported PCM WAV files (8-bit, 16-bit, or 32-bit), audio longer than Whisper's 30-second input window is split into chunks of at most 30 seconds. The splitter looks for a quiet point near each boundary to reduce cuts in the middle of spoken words. Each chunk is transcribed separately, and the results are joined into one output file.
 
 Other formats, including MP3 and unsupported WAV encodings such as 24-bit PCM, are passed to the model in a single operation because the app cannot safely split them. Files longer than 30 seconds may therefore be truncated; convert them to a supported PCM WAV format first when processing longer recordings.
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup,
+submission guidance, and current improvement ideas, including language controls,
+lower-latency C# or Rust implementations, error handling, and a better hackathon
+demo video.
