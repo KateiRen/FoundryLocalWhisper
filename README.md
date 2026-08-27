@@ -119,8 +119,9 @@ Right-click (or left-click, depending on your OS) the tray icon to access:
 - **Microphone** — submenu listing every detected input device; pick one to switch the active microphone at runtime. Disabled while recording. The choice is saved to `transcribe_config.json`.
 - **Auto-paste at cursor** — toggles whether the transcription is automatically pasted at the current cursor position after dictation.
 - **Open History** — opens `transcription_history.jsonl` with the default associated app.
-- **Open App Log** — opens `transcribe.log` with the default associated app.
-- **Quit** — stops recording if active, unloads the model, and exits the app.
+- **Open App Log** — opens `transcribe_app.log` with the default associated app. This holds diagnostics such as model loading, execution providers, and errors. The plain transcript continues to be appended to `transcribe.log`.
+- **Last error / Dismiss error** — shown only after a failure. Selecting the error opens the app log; `Dismiss error` clears it.
+- **Quit** — stops recording if active, unloads the model, and exits the app. `Ctrl+Alt+Q` is also available as a global quit shortcut.
 
 ### CLI options:
 

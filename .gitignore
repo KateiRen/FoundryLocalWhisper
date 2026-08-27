@@ -19,6 +19,7 @@ wheels/
 
 # App runtime artifacts
 transcribe.log
+transcribe_app.log
 transcribe_config.json
 transcription_history.jsonl
 
