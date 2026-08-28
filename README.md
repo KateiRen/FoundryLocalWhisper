@@ -162,6 +162,12 @@ For supported PCM WAV files (8-bit, 16-bit, or 32-bit), audio longer than Whispe
 
 Other formats, including MP3 and unsupported WAV encodings such as 24-bit PCM, are passed to the model in a single operation because the app cannot safely split them. Files longer than 30 seconds may therefore be truncated; convert them to a supported PCM WAV format first when processing longer recordings.
 
+## C# prototype
+
+[`csharp/FoundryLocalWhisper`](csharp/FoundryLocalWhisper/README.md) is a C# port of the tray app built to test whether a native client lowers interaction latency. It keeps the same workflow — global `Ctrl+Win` push-to-talk, 16 kHz mono capture, local Foundry Local inference, clipboard output with optional auto-paste, tray menu, and the shared `transcribe_config.json`.
+
+In the current single-shot file-mode benchmark, it has lower measured process wall-clock time on the same audio, model, and machine. Catalog and model initialization costs are attributed differently by the two SDK paths, so this is not a direct model-load advantage. Once loaded, inference-to-text and inference-to-paste latency are broadly similar because both implementations spend that time inside the same Foundry Local inference call. See [`benchmark/results/python_vs_csharp.md`](benchmark/results/python_vs_csharp.md) for the full numbers and [`benchmark/README.md`](benchmark/README.md#python-vs-c-latency-comparison) for how to reproduce them.
+
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup,

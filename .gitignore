@@ -29,6 +29,11 @@ sample-speech*.wav
 # Local transcriptions
 *.txt
 
+# c# generated files
+*bin*
+*obj*
+*.user
+
 # Generated benchmark artifacts
 /benchmark/results/
 
