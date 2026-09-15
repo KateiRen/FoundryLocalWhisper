@@ -9,6 +9,7 @@ import threading
 import time
 import wave
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, cast
 
@@ -37,7 +38,8 @@ QNN_MODEL_DIR = (
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 HISTORY_PATH = SCRIPT_DIR / "transcription_history.jsonl"
-APP_LOG_PATH = SCRIPT_DIR / "transcribe.log"
+TRANSCRIPT_LOG_PATH = SCRIPT_DIR / "transcribe.log"
+APP_LOG_PATH = SCRIPT_DIR / "transcribe_app.log"
 CONFIG_PATH = SCRIPT_DIR / "transcribe_config.json"
 MIC_ICON_PATH = SCRIPT_DIR / "assets" / "mic.png"
 MIC_ICON_RECORDING_PATH = SCRIPT_DIR / "assets" / "mic_rec.png"
@@ -46,6 +48,9 @@ VK_LCONTROL = 0xA2
 VK_RCONTROL = 0xA3
 VK_LWIN = 0x5B
 VK_RWIN = 0x5C
+VK_LMENU = 0xA4
+VK_RMENU = 0xA5
+VK_Q = 0x51
 
 WH_KEYBOARD_LL = 13
 WM_KEYDOWN = 0x0100
@@ -57,6 +62,10 @@ WM_QUIT_MSG = 0x0012
 CF_UNICODETEXT = 13
 GMEM_MOVEABLE = 0x0002
 KEYEVENTF_KEYUP = 0x0002
+
+CTRL_C_EVENT = 0
+CTRL_BREAK_EVENT = 1
+CTRL_CLOSE_EVENT = 2
 
 
 class KBDLLHOOKSTRUCT(ctypes.Structure):
@@ -76,9 +85,14 @@ HOOKPROC = ctypes.WINFUNCTYPE(
     ctypes.wintypes.LPARAM,
 )
 
+PHANDLER_ROUTINE = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.DWORD)
+
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.windll.kernel32
+
+kernel32.SetConsoleCtrlHandler.argtypes = [PHANDLER_ROUTINE, ctypes.wintypes.BOOL]
+kernel32.SetConsoleCtrlHandler.restype = ctypes.wintypes.BOOL
 
 user32.SetWindowsHookExW.argtypes = [
     ctypes.c_int,
@@ -158,13 +172,21 @@ def configure_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[logging.StreamHandler()],
+        handlers=[
+            logging.StreamHandler(),
+            RotatingFileHandler(
+                APP_LOG_PATH,
+                maxBytes=1_000_000,
+                backupCount=2,
+                encoding="utf-8",
+            ),
+        ],
     )
 
 
 def append_transcript_log(ts: str, text: str) -> None:
     try:
-        with open(APP_LOG_PATH, "a", encoding="utf-8") as fh:
+        with open(TRANSCRIPT_LOG_PATH, "a", encoding="utf-8") as fh:
             fh.write(f"{ts}\t{text}\n")
     except OSError:
         logging.exception("Failed writing transcript log")
@@ -347,6 +369,7 @@ def create_mic_icon(recording: bool = False) -> Image.Image:
 def set_clipboard_text(text: str) -> None:
     if not user32.OpenClipboard(None):
         raise OSError("OpenClipboard failed")
+    h_global = None
     try:
         if not user32.EmptyClipboard():
             raise OSError("EmptyClipboard failed")
@@ -368,7 +391,24 @@ def set_clipboard_text(text: str) -> None:
             raise OSError("SetClipboardData failed")
         h_global = None
     finally:
+        if h_global:
+            kernel32.GlobalFree(h_global)
         user32.CloseClipboard()
+
+
+def show_fatal_error_dialog(message: str) -> None:
+    """Only visible failure surface when launched hidden via start_transcribe.vbs."""
+    mb_iconerror = 0x00000010
+    mb_topmost = 0x00040000
+    try:
+        user32.MessageBoxW(
+            None,
+            f"{message}\n\nSee the log for details:\n{APP_LOG_PATH}",
+            "Foundry Transcribe - startup failed",
+            mb_iconerror | mb_topmost,
+        )
+    except OSError:
+        logging.exception("Failed to show error dialog")
 
 
 def simulate_ctrl_v() -> None:
@@ -414,6 +454,7 @@ class FoundryTranscribeTrayApp:
         self._win_held = False
         self._both_held_since = 0.0
         self._hook_enabled = True
+        self._last_error: str | None = None
 
         self._hook_thread_id: int | None = None
         self._hook_callback_ref: Any = None
@@ -517,8 +558,9 @@ class FoundryTranscribeTrayApp:
         try:
             with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
                 json.dump(self._config, fh, indent=2)
-        except OSError:
+        except OSError as exc:
             logging.exception("Failed to write config file")
+            self._notify_error(f"Settings could not be saved: {exc}")
 
     @staticmethod
     def _list_input_devices() -> list[tuple[int, str, int]]:
@@ -687,14 +729,22 @@ class FoundryTranscribeTrayApp:
                 logging.warning("Audio status: %s", status)
             self.audio_chunks.append(indata.copy())
 
-        self._stream = sd.InputStream(
-            samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="float32",
-            device=self._input_device,
-            callback=_on_audio,
-        )
-        self._stream.start()
+        try:
+            self._stream = sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                channels=CHANNELS,
+                dtype="float32",
+                device=self._input_device,
+                callback=_on_audio,
+            )
+            self._stream.start()
+        except (sd.PortAudioError, OSError, ValueError) as exc:
+            # Leaving self.recording True here would wedge the hotkey permanently.
+            self.recording = False
+            self._stream = None
+            self._refresh_icon()
+            self._notify_error(f"Microphone unavailable: {exc}")
+            return
 
         self._max_duration_timer = threading.Timer(MAX_RECORD_S, self._on_max_duration_reached)
         self._max_duration_timer.daemon = True
@@ -713,6 +763,17 @@ class FoundryTranscribeTrayApp:
             beep_async(1000, 120)
             self._stop_recording()
 
+    def _close_stream(self) -> None:
+        if self._stream is None:
+            return
+        try:
+            self._stream.stop()
+            self._stream.close()
+        except (sd.PortAudioError, OSError) as exc:
+            self._notify_error(f"Microphone teardown failed: {exc}")
+        finally:
+            self._stream = None
+
     def _stop_recording(self) -> None:
         if not self.recording:
             return
@@ -728,10 +789,7 @@ class FoundryTranscribeTrayApp:
         self._refresh_icon()
         beep_async(900, 90)
 
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+        self._close_stream()
 
         if not self.audio_chunks:
             logging.info("No audio captured")
@@ -804,6 +862,7 @@ class FoundryTranscribeTrayApp:
                 if self.auto_paste and not self._shutting_down:
                     simulate_ctrl_v()
                 beep_async(1200, 80)
+                self._clear_error()
                 self._append_history(
                     {
                         "ts": ts,
@@ -825,10 +884,10 @@ class FoundryTranscribeTrayApp:
                         "status": "empty",
                     }
                 )
-        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+        except Exception as exc:
             elapsed = time.monotonic() - t0
             logging.exception("Transcription failed")
-            beep_async(300, 250)
+            self._notify_error(f"Transcription failed: {exc}")
             self._append_history(
                 {
                     "ts": ts,
@@ -856,10 +915,27 @@ class FoundryTranscribeTrayApp:
             self._tray.icon = create_mic_icon(self.recording)
         if self.recording:
             self._tray.title = "Foundry Transcribe | Recording..."
+        elif self._last_error:
+            # Windows caps tray tooltips at 128 chars.
+            self._tray.title = f"Foundry Transcribe | Error: {self._last_error}"[:127]
         elif not self._hook_enabled:
             self._tray.title = "Foundry Transcribe | Paused"
         else:
             self._tray.title = "Foundry Transcribe | Hold Ctrl+Win to dictate"
+
+    def _notify_error(self, message: str) -> None:
+        logging.error(message)
+        self._last_error = message
+        beep_async(300, 250)
+        self._refresh_icon(update_image=False)
+        self._rebuild_menu()
+
+    def _clear_error(self) -> None:
+        if self._last_error is None:
+            return
+        self._last_error = None
+        self._refresh_icon(update_image=False)
+        self._rebuild_menu()
 
     def _is_ctrl(self, vk: int) -> bool:
         return vk in (VK_LCONTROL, VK_RCONTROL)
@@ -872,6 +948,14 @@ class FoundryTranscribeTrayApp:
         return bool(user32.GetAsyncKeyState(vk) & 0x8000)
 
     def _on_key_event(self, vk: int, is_down: bool) -> bool:
+        if vk == VK_Q:
+            ctrl_down = self._is_key_down(VK_LCONTROL) or self._is_key_down(VK_RCONTROL)
+            alt_down = self._is_key_down(VK_LMENU) or self._is_key_down(VK_RMENU)
+            if is_down and ctrl_down and alt_down:
+                self.request_quit()
+                return True
+            return False
+
         previous_ctrl = self._ctrl_held
         previous_win = self._win_held
 
@@ -907,10 +991,7 @@ class FoundryTranscribeTrayApp:
                         if self._max_duration_timer is not None:
                             self._max_duration_timer.cancel()
                             self._max_duration_timer = None
-                        if self._stream is not None:
-                            self._stream.stop()
-                            self._stream.close()
-                            self._stream = None
+                        self._close_stream()
                         self.audio_chunks = []
                         self._refresh_icon()
                         logging.info("Tap too short (%.0fms), discarded", hold_ms)
@@ -930,7 +1011,7 @@ class FoundryTranscribeTrayApp:
                 ).contents
                 vk = kb.vkCode
                 is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
-                if self._is_ctrl(vk) or self._is_win(vk):
+                if self._is_ctrl(vk) or self._is_win(vk) or vk == VK_Q:
                     suppress = self._on_key_event(vk, is_down)
                     if suppress:
                         return 1
@@ -943,16 +1024,24 @@ class FoundryTranscribeTrayApp:
         self._hook_thread_id = kernel32.GetCurrentThreadId()
         self._hook_callback_ref = HOOKPROC(self._hook_proc)
 
-        hook = user32.SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            self._hook_callback_ref,
-            None,
-            0,
-        )
+        hook = None
+        for attempt in range(2):
+            hook = user32.SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                self._hook_callback_ref,
+                None,
+                0,
+            )
+            if hook:
+                break
+            err = ctypes.get_last_error()
+            logging.error("SetWindowsHookExW failed (attempt %d): %s", attempt + 1, err)
+            time.sleep(0.5)
 
         if not hook:
-            err = ctypes.get_last_error()
-            logging.error("SetWindowsHookExW failed: %s", err)
+            self._notify_error(
+                "Keyboard hook could not be installed - the Ctrl+Win hotkey is unavailable"
+            )
             return
 
         logging.info("Keyboard hook installed")
@@ -970,6 +1059,10 @@ class FoundryTranscribeTrayApp:
             user32.DispatchMessageW(ctypes.byref(msg))
 
         user32.UnhookWindowsHookEx(hook)
+        if not self._shutting_down:
+            self._notify_error(
+                "Keyboard hook stopped - the Ctrl+Win hotkey is no longer active"
+            )
 
     def _menu_toggle_hook(self, _icon, _item) -> None:
         self._hook_enabled = not self._hook_enabled
@@ -1021,12 +1114,20 @@ class FoundryTranscribeTrayApp:
                     self._save_config()
                     logging.info("Switched to model: %s", self.model_name)
                     beep_async(1100, 80)
-            except (OSError, RuntimeError, ValueError, TypeError):
+                    self._clear_error()
+            except (OSError, RuntimeError, ValueError, TypeError) as exc:
                 logging.exception("Model switch failed")
                 try:
                     self._load_speech_model(old_model_name)
+                    self._notify_error(
+                        f"Could not load '{model_name}', kept '{old_model_name}': {exc}"
+                    )
                 except (OSError, RuntimeError, ValueError, TypeError):
                     logging.exception("Failed to reload previous model: %s", old_model_name)
+                    self._notify_error(
+                        f"Model switch failed and '{old_model_name}' could not be restored - "
+                        "restart the app"
+                    )
             finally:
                 self._model_switch_in_progress = False
                 self._rebuild_menu()
@@ -1112,7 +1213,19 @@ class FoundryTranscribeTrayApp:
             )
         return pystray.Menu(*items)
 
-    def _menu_quit(self, icon, _item) -> None:
+    def _menu_quit(self, _icon, _item) -> None:
+        self._quit()
+
+    def request_quit(self) -> None:
+        """Quit from a non-UI thread (hotkey, console handler) without blocking it."""
+        if self._shutting_down:
+            return
+        threading.Thread(target=self._quit, daemon=True).start()
+
+    def _quit(self) -> None:
+        if self._shutting_down:
+            return
+
         logging.info("Shutting down")
         self._hook_enabled = False
         self._shutting_down = True
@@ -1130,7 +1243,8 @@ class FoundryTranscribeTrayApp:
             except (OSError, RuntimeError):  # noqa: BLE001
                 logging.exception("Model unload failed")
 
-        icon.stop()
+        if self._tray is not None:
+            self._tray.stop()
 
     def _build_menu(self) -> pystray.Menu:
         state_label = "Active (Hold Ctrl+Win)" if self._hook_enabled else "Paused"
@@ -1145,10 +1259,22 @@ class FoundryTranscribeTrayApp:
                 mic_name = "unknown"
             mic_label = f"Mic: [{self._input_device}] {mic_name}"
 
+        error_items: list[Any] = []
+        if self._last_error:
+            error_items = [
+                pystray.MenuItem(
+                    f"Last error: {self._last_error}"[:80],
+                    self._menu_open_app_log,
+                ),
+                pystray.MenuItem("Dismiss error", lambda *_: self._clear_error()),
+                pystray.Menu.SEPARATOR,
+            ]
+
         return pystray.Menu(
             pystray.MenuItem(state_label, lambda *_: None, enabled=False),
             pystray.MenuItem(toggle_label, self._menu_toggle_hook),
             pystray.Menu.SEPARATOR,
+            *error_items,
             pystray.MenuItem(model_label, lambda *_: None, enabled=False),
             pystray.MenuItem("Whisper model", self._build_model_submenu()),
             pystray.Menu.SEPARATOR,
@@ -1163,7 +1289,7 @@ class FoundryTranscribeTrayApp:
             pystray.MenuItem("Open History", self._menu_open_history),
             pystray.MenuItem("Open App Log", self._menu_open_app_log),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Quit", self._menu_quit),
+            pystray.MenuItem("Quit (Ctrl+Alt+Q)", self._menu_quit),
         )
 
     def _rebuild_menu(self) -> None:
@@ -1185,7 +1311,7 @@ class FoundryTranscribeTrayApp:
             menu=self._build_menu(),
         )
 
-        logging.info("Ready. Hold Ctrl+Win to dictate.")
+        logging.info("Ready. Hold Ctrl+Win to dictate. Hold Ctrl+Alt+Q to quit.")
         self._tray.run()
 
     def transcribe_file(self, input_path: Path, output_path: Path) -> None:
@@ -1355,7 +1481,24 @@ def main() -> None:
         app.transcribe_file(args.transcribe_file, args.output_file)
         return
 
-    app.run()
+    # Runs on an OS-injected thread, so it still fires while the tray message
+    # loop blocks the main thread. No-op when launched without a console.
+    def _console_ctrl_handler(ctrl_type: int) -> bool:
+        if ctrl_type in (CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT):
+            logging.info("Console interrupt received")
+            app.request_quit()
+            return True
+        return False
+
+    handler_ref = PHANDLER_ROUTINE(_console_ctrl_handler)
+    kernel32.SetConsoleCtrlHandler(handler_ref, True)
+
+    try:
+        app.run()
+    except Exception as exc:  # last chance to make a hidden failure visible
+        logging.exception("Fatal error")
+        show_fatal_error_dialog(f"Foundry Transcribe could not start:\n{exc}")
+        raise
 
 
 if __name__ == "__main__":
