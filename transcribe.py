@@ -168,6 +168,30 @@ kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
 kernel32.GlobalUnlock.restype = ctypes.wintypes.BOOL
 
 
+_BENCHMARK_TIMING = False
+_BENCHMARK_START = time.monotonic()
+
+
+def enable_benchmark_timing() -> None:
+    global _BENCHMARK_TIMING, _BENCHMARK_START
+    _BENCHMARK_TIMING = True
+    _BENCHMARK_START = time.monotonic()
+
+
+def timing_mark(event: str) -> None:
+    """Emit a machine-readable checkpoint consumed by compare_python_csharp.py."""
+    if not _BENCHMARK_TIMING:
+        return
+    payload = json.dumps(
+        {
+            "event": event,
+            "elapsed_ms": (time.monotonic() - _BENCHMARK_START) * 1000.0,
+            "wall_clock": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    print(f"@@TIMING@@{payload}")
+
+
 def configure_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -440,6 +464,7 @@ class FoundryTranscribeTrayApp:
         auto_paste: bool = True,
         mic_index: int | None = None,
         force_select_mic: bool = False,
+        execution_provider: str | None = None,
     ):
         self.model_name = model_name
         self.auto_paste = auto_paste
@@ -474,6 +499,9 @@ class FoundryTranscribeTrayApp:
         self._initial_mic_override = mic_index
         self._force_select_mic = force_select_mic
         self._initial_model_override = model_name
+        self._execution_provider_override = (
+            execution_provider.strip().upper() if execution_provider else None
+        )
         self.model_name = "whisper-tiny"
 
     def _resolve_model_name(self) -> None:
@@ -635,6 +663,7 @@ class FoundryTranscribeTrayApp:
 
     def _initialize_foundry(self) -> None:
         logging.info("Initializing Foundry Local SDK")
+        timing_mark("foundry_init_start")
         config = Configuration(app_name="foundry_local_whisper_tray")
         FoundryLocalManager.initialize(config)
         self._manager = FoundryLocalManager.instance
@@ -648,7 +677,9 @@ class FoundryTranscribeTrayApp:
             logging.info("EP %s %.1f%%", ep_name, percent)
 
         self._manager.download_and_register_eps(progress_callback=ep_progress)
+        timing_mark("foundry_init_done")
         self._available_models = self._discover_whisper_models()
+        timing_mark("model_discovery_done")
         if self.model_name not in self._available_models and self._available_models:
             fallback = self._available_models[0]
             logging.warning(
@@ -660,6 +691,23 @@ class FoundryTranscribeTrayApp:
 
         self._load_speech_model(self.model_name)
         logging.info("Foundry model loaded: %s", self.model_name)
+
+    def _select_variant(self, speech_model: Any, model_name: str) -> None:
+        """Pin a specific device type (CPU/GPU/NPU) if --execution-provider was given."""
+        if self._execution_provider_override is None:
+            return
+
+        for variant in speech_model.variants:
+            runtime = variant.info.runtime
+            if runtime is not None and str(runtime.device_type).upper() == self._execution_provider_override:
+                speech_model.select_variant(variant)
+                return
+
+        logging.warning(
+            "No '%s' variant available for '%s'; using the default variant",
+            self._execution_provider_override,
+            model_name,
+        )
 
     def _load_speech_model(self, model_name: str) -> None:
         if model_name == QNN_BYO_MODEL_NAME:
@@ -679,9 +727,11 @@ class FoundryTranscribeTrayApp:
         if self._manager is None:
             raise RuntimeError("Foundry manager not initialized")
 
+        timing_mark("model_load_start")
         speech_model = self._manager.catalog.get_model(model_name)
         if speech_model is None:
             raise RuntimeError(f"Foundry model not found: {model_name}")
+        self._select_variant(speech_model, model_name)
         speech_model.download(
             lambda p: logging.info("Downloading %s %.1f%%", model_name, p)
         )
@@ -689,6 +739,7 @@ class FoundryTranscribeTrayApp:
         self._speech_model = speech_model
         self._audio_client = speech_model.get_audio_client()
         self.model_name = model_name
+        timing_mark("model_load_done")
 
         runtime = speech_model.info.runtime
         if runtime is not None:
@@ -1322,6 +1373,7 @@ class FoundryTranscribeTrayApp:
         self._initialize_foundry()
 
         logging.info("Transcribing file: %s", input_path)
+        timing_mark("transcription_start")
         t0 = time.monotonic()
 
         wav_data = _read_wav_pcm(input_path)
@@ -1340,6 +1392,8 @@ class FoundryTranscribeTrayApp:
                 )
             response = self._require_audio_client().transcribe(str(input_path))
             text = response.text.strip() if hasattr(response, "text") else str(response).strip()
+            timing_mark("transcription_done")
+            self._benchmark_paste(text)
             output_path.write_text(text, encoding="utf-8")
             logging.info("Wrote transcription to %s", output_path)
             print(text)
@@ -1382,10 +1436,22 @@ class FoundryTranscribeTrayApp:
                         pass
 
         text = " ".join(texts)
+        timing_mark("transcription_done")
+        self._benchmark_paste(text)
         output_path.write_text(text, encoding="utf-8")
         logging.info("Wrote transcription to %s", output_path)
         print(text)
         self._log_transcription_speed(time.monotonic() - t0, duration_s, text)
+
+    @staticmethod
+    def _benchmark_paste(text: str) -> None:
+        """Mirrors the interactive clipboard/paste cost so file-mode benchmarks are comparable."""
+        if not _BENCHMARK_TIMING or not text:
+            return
+        set_clipboard_text(text)
+        timing_mark("clipboard_set")
+        simulate_ctrl_v()
+        timing_mark("paste_simulated")
 
     @staticmethod
     def _format_duration(seconds: float) -> str:
@@ -1464,10 +1530,28 @@ def main() -> None:
         default=None,
         help="Text file to write the transcription to (used with --transcribe-file)",
     )
+    parser.add_argument(
+        "--benchmark-timing",
+        action="store_true",
+        help=(
+            "Emit @@TIMING@@ JSON checkpoints for compare_python_csharp.py "
+            "(also mirrors the clipboard/paste cost in --transcribe-file mode)"
+        ),
+    )
+    parser.add_argument(
+        "--execution-provider",
+        choices=["CPU", "GPU", "NPU"],
+        default=None,
+        help="Pin the model to a specific device type variant, if the catalog has one",
+    )
     args = parser.parse_args()
 
     if bool(args.transcribe_file) != bool(args.output_file):
         parser.error("--transcribe-file and --output-file must be used together")
+
+    if args.benchmark_timing:
+        enable_benchmark_timing()
+    timing_mark("process_start")
 
     configure_logging()
     app = FoundryTranscribeTrayApp(
@@ -1475,6 +1559,7 @@ def main() -> None:
         auto_paste=not args.no_auto_paste,
         mic_index=args.mic_index,
         force_select_mic=args.select_mic,
+        execution_provider=args.execution_provider,
     )
 
     if args.transcribe_file:
